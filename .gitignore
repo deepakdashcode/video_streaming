@@ -1,0 +1,12 @@
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# Backend
+backend/uploads/
+backend/__pycache__/
+
+# OS & IDE
+.DS_Store
+.vscode/
+.idea/
