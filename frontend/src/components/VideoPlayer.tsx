@@ -85,12 +85,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     }
   }, [activeScreenStream]);
 
-  // Callback Ref for video element to handle MediaStream assignment reliably
+  // Callback Ref for video element
   const handleVideoRef = (node: HTMLVideoElement | null) => {
     videoRef.current = node;
-    if (node && isStreamedMedia && !isSelfStreaming && activeScreenStream) {
-      playScreenShareVideo(node);
-    }
   };
 
   useEffect(() => {
@@ -98,6 +95,20 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       playScreenShareVideo(videoRef.current);
     }
   }, [isStreamedMedia, isSelfStreaming, activeScreenStream, playScreenShareVideo]);
+
+  // Sync P2P local video source for Host preview (only when src changes)
+  useEffect(() => {
+    if (isP2PVideo && isSelfStreaming && videoRef.current && capturedVideoRef?.current) {
+      if (videoRef.current.src !== capturedVideoRef.current.src) {
+        videoRef.current.src = capturedVideoRef.current.src;
+        videoRef.current.currentTime = capturedVideoRef.current.currentTime;
+        videoRef.current.playbackRate = capturedVideoRef.current.playbackRate;
+        if (!capturedVideoRef.current.paused) {
+          videoRef.current.play().catch(() => {});
+        }
+      }
+    }
+  }, [isP2PVideo, isSelfStreaming, capturedVideoRef]);
 
   // Track Fullscreen state changes
   useEffect(() => {
@@ -236,23 +247,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             isP2PVideo && capturedVideoRef?.current ? (
               /* P2P Video: show the actual video element with host controls */
               <video
-                ref={(node) => {
-                  videoRef.current = node;
-                  if (node && capturedVideoRef.current) {
-                    // Mirror the captured video source for host preview
-                    node.src = capturedVideoRef.current.src;
-                    node.currentTime = capturedVideoRef.current.currentTime;
-                    node.playbackRate = capturedVideoRef.current.playbackRate;
-                    if (!capturedVideoRef.current.paused) node.play().catch(() => {});
-                  }
-                }}
+                ref={videoRef}
                 onTimeUpdate={() => {
                   if (videoRef.current) {
                     setCurrentTime(videoRef.current.currentTime);
-                    // Sync the captured (hidden) video
-                    if (capturedVideoRef?.current && Math.abs(capturedVideoRef.current.currentTime - videoRef.current.currentTime) > 0.5) {
-                      capturedVideoRef.current.currentTime = videoRef.current.currentTime;
-                    }
                   }
                 }}
                 onLoadedMetadata={() => {
@@ -384,6 +382,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           <video
             ref={videoRef}
             src={videoSrc}
+            autoPlay
             onTimeUpdate={onTimeUpdate}
             onLoadedMetadata={onLoadedMetadata}
             playsInline

@@ -62,6 +62,7 @@ export const RoomPage: React.FC<RoomPageProps> = ({ session, onLeave }) => {
     participants,
     sendWSEvent: sendEvent,
     subscribeWS: subscribe,
+    playbackState,
   });
 
   const isHost = session.role === 'HOST';

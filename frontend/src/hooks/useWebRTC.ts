@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
-import type { User, WSEvent } from '../types';
+import type { User, WSEvent, PlaybackState } from '../types';
 
 interface UseWebRTCOptions {
   selfUserId: string;
   participants: Record<string, User>;
   sendWSEvent: (type: string, payload?: any) => void;
   subscribeWS: (type: string, callback: (event: WSEvent) => void) => () => void;
+  playbackState?: PlaybackState;
 }
 
 const ICE_SERVERS: RTCConfiguration = {
@@ -16,7 +17,7 @@ const ICE_SERVERS: RTCConfiguration = {
   ],
 };
 
-export function useWebRTC({ selfUserId, participants, sendWSEvent, subscribeWS }: UseWebRTCOptions) {
+export function useWebRTC({ selfUserId, participants, sendWSEvent, subscribeWS, playbackState }: UseWebRTCOptions) {
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [screenStream, setScreenStream] = useState<MediaStream | null>(null);
   const [peerStreams, setPeerStreams] = useState<Record<string, MediaStream>>({});
@@ -87,12 +88,19 @@ export function useWebRTC({ selfUserId, participants, sendWSEvent, subscribeWS }
       }
     }
 
-    if (cameraStream) {
-      setPeerStreams(prev => ({ ...prev, [peerId]: cameraStream }));
-    }
-    if (screenStream) {
-      setPeerScreenStreams(prev => ({ ...prev, [peerId]: screenStream }));
-    }
+    setPeerStreams(prev => {
+      const n = { ...prev };
+      if (cameraStream) n[peerId] = cameraStream;
+      else delete n[peerId];
+      return n;
+    });
+
+    setPeerScreenStreams(prev => {
+      const n = { ...prev };
+      if (screenStream) n[peerId] = screenStream;
+      else delete n[peerId];
+      return n;
+    });
   }, []);
 
   // Create PeerConnection for target user
@@ -495,24 +503,46 @@ export function useWebRTC({ selfUserId, participants, sendWSEvent, subscribeWS }
   };
 
   // ============================================================
-  // SUBSCRIBE to screen stream ID broadcasts
+  // SUBSCRIBE to room & screen stream ID broadcasts
   // ============================================================
+  const handlePlaybackStateUpdate = useCallback((ps?: PlaybackState | null) => {
+    if (!ps) return;
+    if (ps.screen_stream_id) {
+      console.log(`[WebRTC] Learned screen stream ID: ${ps.screen_stream_id}`);
+      knownScreenStreamIdsRef.current.add(ps.screen_stream_id);
+      if (ps.sharer_user_id && peerAllStreamsRef.current[ps.sharer_user_id]) {
+        updatePeerStreamStates(ps.sharer_user_id);
+      }
+    }
+    if (ps.source_type === 'NONE' || ps.source_type === 'URL' || ps.source_type === 'LOCAL_FILE') {
+      knownScreenStreamIdsRef.current.clear();
+    }
+  }, [updatePeerStreamStates]);
+
+  // Handle direct playbackState prop updates
   useEffect(() => {
+    if (playbackState) {
+      handlePlaybackStateUpdate(playbackState);
+    }
+  }, [playbackState, handlePlaybackStateUpdate]);
+
+  useEffect(() => {
+    // Learn screen stream ID when joining room (INIT_ROOM_STATE)
+    const unsubInit = subscribeWS('INIT_ROOM_STATE', (event: WSEvent) => {
+      const ps = event.payload?.room?.playback_state;
+      handlePlaybackStateUpdate(ps);
+    });
+
     // When we receive MEDIA_CHANGED with a screen share, learn the stream ID
     const unsubMedia = subscribeWS('MEDIA_CHANGED', (event: WSEvent) => {
       const ps = event.payload?.playback_state;
-      if (ps && ps.screen_stream_id) {
-        console.log(`[WebRTC] Learned screen stream ID: ${ps.screen_stream_id}`);
-        knownScreenStreamIdsRef.current.add(ps.screen_stream_id);
-        // Re-derive states for the sharer
-        if (ps.sharer_user_id && peerAllStreamsRef.current[ps.sharer_user_id]) {
-          updatePeerStreamStates(ps.sharer_user_id);
-        }
-      }
-      // If screen share stopped, clear known IDs
-      if (ps && (ps.source_type === 'NONE' || ps.source_type === 'URL' || ps.source_type === 'LOCAL_FILE')) {
-        knownScreenStreamIdsRef.current.clear();
-      }
+      handlePlaybackStateUpdate(ps);
+    });
+
+    // When playback state changes, check for screen stream ID
+    const unsubPlayback = subscribeWS('PLAYBACK_STATE_CHANGED', (event: WSEvent) => {
+      const ps = event.payload?.playback_state;
+      handlePlaybackStateUpdate(ps);
     });
 
     // Direct screen stream ID notification (from SCREEN_SHARE_START broadcast payload)
@@ -529,10 +559,12 @@ export function useWebRTC({ selfUserId, participants, sendWSEvent, subscribeWS }
     });
 
     return () => {
+      unsubInit();
       unsubMedia();
+      unsubPlayback();
       unsubScreenStart();
     };
-  }, [subscribeWS, updatePeerStreamStates]);
+  }, [subscribeWS, handlePlaybackStateUpdate, updatePeerStreamStates]);
 
   // ============================================================
   // AUTO-OFFER to new participants

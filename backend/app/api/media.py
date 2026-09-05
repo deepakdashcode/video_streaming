@@ -3,7 +3,7 @@ import time
 import mimetypes
 from typing import Optional
 from fastapi import APIRouter, HTTPException, Depends, Header, UploadFile, File, Request, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from app.services.room_service import room_service
 from app.config import settings
 from app.api.rooms import get_current_user_from_header
@@ -84,8 +84,7 @@ async def upload_local_video(
     }
 
 @router.get("/{room_id}/media/{media_id}")
-
-async def stream_local_video(room_id: str, media_id: str, request: Request):
+async def stream_local_video(room_id: str, media_id: str):
     """HTTP 206 Partial Content Byte-Range video streaming endpoint."""
     media_info = room_service.get_local_media(room_id, media_id)
     if not media_info:
@@ -95,62 +94,9 @@ async def stream_local_video(room_id: str, media_id: str, request: Request):
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="File missing from storage")
 
-    file_size = os.path.getsize(file_path)
     mime_type = media_info.get("mime_type", "video/mp4")
-
-    range_header = request.headers.get("range")
-    
-    if range_header:
-        # Parse range header e.g. "bytes=0-" or "bytes=1000-2000"
-        bytes_type, bytes_range = range_header.strip().split("=")
-        if bytes_type != "bytes":
-            raise HTTPException(status_code=400, detail="Invalid Range header")
-
-        parts = bytes_range.split("-")
-        start = int(parts[0]) if parts[0] else 0
-        end = int(parts[1]) if len(parts) > 1 and parts[1] else file_size - 1
-
-        if start >= file_size or end >= file_size or start > end:
-            raise HTTPException(
-                status_code=status.HTTP_416_REQUESTED_RANGE_NOT_SATISFIABLE,
-                headers={"Content-Range": f"bytes */{file_size}"}
-            )
-
-        chunk_size = (end - start) + 1
-
-        def iter_file_chunk(file_path: str, offset: int, length: int):
-            with open(file_path, "rb") as f:
-                f.seek(offset)
-                remaining = length
-                while remaining > 0:
-                    read_len = min(1024 * 512, remaining) # 512KB chunks
-                    data = f.read(read_len)
-                    if not data:
-                        break
-                    remaining -= len(data)
-                    yield data
-
-        headers = {
-            "Content-Range": f"bytes {start}-{end}/{file_size}",
-            "Accept-Ranges": "bytes",
-            "Content-Length": str(chunk_size),
-            "Content-Type": mime_type,
-        }
-
-        return StreamingResponse(
-            iter_file_chunk(file_path, start, chunk_size),
-            status_code=206,
-            headers=headers
-        )
-
-    # Full file fallback
-    def iter_full_file(file_path: str):
-        with open(file_path, "rb") as f:
-            while chunk := f.read(1024 * 512):
-                yield chunk
-
-    return StreamingResponse(
-        iter_full_file(file_path),
+    return FileResponse(
+        file_path,
         media_type=mime_type,
-        headers={"Content-Length": str(file_size), "Accept-Ranges": "bytes"}
+        filename=media_info.get("filename")
     )

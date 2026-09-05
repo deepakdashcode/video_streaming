@@ -20,7 +20,7 @@ export function usePlaybackSync({
   const calculateExpectedPosition = useCallback((state: PlaybackState): number => {
     if (!state.playing) return state.position;
     const elapsedSeconds = (Date.now() - state.updated_at) / 1000;
-    return state.position + elapsedSeconds * (state.playback_rate || 1.0);
+    return Math.max(0, state.position + elapsedSeconds * (state.playback_rate || 1.0));
   }, []);
 
   // Synchronize player with state
@@ -28,50 +28,68 @@ export function usePlaybackSync({
     const video = videoRef.current;
     if (!video || !playbackState.media_url) return;
 
-    const expectedPos = calculateExpectedPosition(playbackState);
-    const actualPos = video.currentTime;
-    const drift = Math.abs(expectedPos - actualPos);
+    const targetRate = playbackState.playback_rate || 1.0;
 
-    // 1. Play / Pause state sync
+    // 1. Play / Pause state sync (Applies to both host & viewers)
     if (playbackState.playing && video.paused) {
-      video.play().catch((err) => console.warn('Autoplay prevented:', err));
+      video.play().catch((err) => console.warn('[Sync] Autoplay prevented:', err));
     } else if (!playbackState.playing && !video.paused) {
       video.pause();
     }
 
-    // 2. Playback speed sync
-    if (video.playbackRate !== playbackState.playback_rate && drift < 0.25) {
-      video.playbackRate = playbackState.playback_rate;
+    // 2. Base playback speed sync
+    if (video.playbackRate !== targetRate && !canControl) {
+      video.playbackRate = targetRate;
     }
 
-    // 3. Drift Correction logic
-    if (drift > 1.0) {
-      // Large drift: Hard seek
-      console.log(`[Sync] Large drift (${drift.toFixed(2)}s). Seeking to ${expectedPos.toFixed(2)}s`);
-      video.currentTime = expectedPos;
-    } else if (drift > 0.25 && playbackState.playing) {
-      // Moderate drift: Smooth rate adjustment
-      const catchUpRate = expectedPos > actualPos ? 1.05 : 0.95;
-      video.playbackRate = (playbackState.playback_rate || 1.0) * catchUpRate;
-    } else {
-      // Small drift: Normal rate
-      video.playbackRate = playbackState.playback_rate || 1.0;
-    }
-  }, [videoRef, playbackState, calculateExpectedPosition]);
+    // 3. Drift Correction — ONLY for Viewers (non-controllers).
+    // The Host/Controller is the master clock and MUST NOT be drift-checked or force-seeked!
+    if (!canControl) {
+      // Do NOT check or correct drift if video is buffering, seeking, or hasn't loaded metadata
+      if (video.readyState < 3 || video.seeking) {
+        return;
+      }
 
-  // Periodic drift check (every 2 seconds)
+      const expectedPos = calculateExpectedPosition(playbackState);
+      const actualPos = video.currentTime;
+      const drift = Math.abs(expectedPos - actualPos);
+
+      if (drift > 3.0) {
+        // Large drift: hard seek to expected position
+        console.log(`[Sync] Large drift (${drift.toFixed(2)}s). Seeking to ${expectedPos.toFixed(2)}s`);
+        video.currentTime = expectedPos;
+        video.playbackRate = targetRate;
+      } else if (drift > 0.6 && playbackState.playing) {
+        // Moderate drift: subtle rate adjustment (1.04x or 0.96x) to catch up smoothly without seeking
+        const catchUpRate = expectedPos > actualPos ? 1.04 : 0.96;
+        video.playbackRate = targetRate * catchUpRate;
+      } else {
+        // In tight sync: reset to target playback rate
+        if (video.playbackRate !== targetRate) {
+          video.playbackRate = targetRate;
+        }
+      }
+    }
+  }, [videoRef, playbackState, canControl, calculateExpectedPosition]);
+
+  // Sync immediately whenever playback state or control status changes
   useEffect(() => {
     syncPlayer();
-    const interval = setInterval(syncPlayer, 2000);
-    return () => clearInterval(interval);
   }, [syncPlayer]);
+
+  // Periodic background drift check (every 4 seconds) — only active for viewers while playing
+  useEffect(() => {
+    if (canControl || !playbackState.playing) return;
+    const interval = setInterval(syncPlayer, 4000);
+    return () => clearInterval(interval);
+  }, [canControl, playbackState.playing, syncPlayer]);
 
   // Host Action Triggers
   const handlePlay = useCallback(() => {
     if (!canControl || isSelfAction.current) return;
     const video = videoRef.current;
     if (!video) return;
-    
+
     isSelfAction.current = true;
     sendWSEvent('PLAY', { position: video.currentTime });
     setTimeout(() => { isSelfAction.current = false; }, 300);
