@@ -1,5 +1,5 @@
 import React from 'react';
-import { Lock, Unlock, Camera, Mic, Sliders, X } from 'lucide-react';
+import { Lock, Unlock, Camera, Mic, Sliders, X, Monitor } from 'lucide-react';
 import type { RoomSettings } from '../types';
 
 interface HostControlsProps {
@@ -86,6 +86,23 @@ export const HostControls: React.FC<HostControlsProps> = ({
               type="checkbox"
               checked={settings.allow_microphone}
               onChange={(e) => onUpdateSettings({ allow_microphone: e.target.checked })}
+              style={{ width: 18, height: 18, accentColor: 'var(--accent-primary)', cursor: 'pointer' }}
+            />
+          </div>
+
+          {/* Allow Participant Screen Share */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.75rem', background: 'rgba(255,255,255,0.04)', borderRadius: 'var(--radius-md)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+              <Monitor size={20} color="#eab308" />
+              <div>
+                <strong style={{ fontSize: '0.9rem', display: 'block', color: 'white' }}>Participant Screen Share</strong>
+                <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Allow participants to share screens</span>
+              </div>
+            </div>
+            <input
+              type="checkbox"
+              checked={settings.allow_screen_share}
+              onChange={(e) => onUpdateSettings({ allow_screen_share: e.target.checked })}
               style={{ width: 18, height: 18, accentColor: 'var(--accent-primary)', cursor: 'pointer' }}
             />
           </div>

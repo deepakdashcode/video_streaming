@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { Monitor } from 'lucide-react';
 import type { SessionData, Room, User, PlaybackState, RoomSettings, FloatingReaction, WSEvent } from '../types';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { useWebRTC } from '../hooks/useWebRTC';
@@ -31,20 +32,40 @@ export const RoomPage: React.FC<RoomPageProps> = ({ session, onLeave }) => {
     allow_camera: true,
     allow_microphone: true,
     allow_participant_control: false,
+    allow_screen_share: false,
   });
 
   const [reactions, setReactions] = useState<FloatingReaction[]>([]);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [pendingShareRequest, setPendingShareRequest] = useState<{ userId: string; userName: string } | null>(null);
 
   const { isConnected, sendEvent, subscribe } = useWebSocket(session.room_id, session.token);
 
   // Initialize WebRTC
-  const { localStream, peerStreams, isCamOn, isMicOn, toggleCamera, toggleMic } = useWebRTC({
+  const {
+    localStream,
+    screenStream,
+    peerStreams,
+    peerScreenStreams,
+    isCamOn,
+    isMicOn,
+    isVideoSharing,
+    toggleCamera,
+    toggleMic,
+    startScreenShare,
+    stopScreenShare,
+    startVideoShare,
+    stopVideoShare,
+    capturedVideoRef,
+  } = useWebRTC({
     selfUserId: session.user_id,
     participants,
     sendWSEvent: sendEvent,
     subscribeWS: subscribe,
   });
+
+  const isHost = session.role === 'HOST';
+  const canControl = isHost || settings.allow_participant_control;
 
   // Handle incoming WebSocket events
   useEffect(() => {
@@ -107,7 +128,7 @@ export const RoomPage: React.FC<RoomPageProps> = ({ session, onLeave }) => {
         id: Math.random().toString(36).substring(2, 9),
         emoji,
         user_name,
-        left: 10 + Math.random() * 80, // Random percentage
+        left: 10 + Math.random() * 80,
       };
       setReactions((prev) => [...prev.slice(-15), newReaction]);
       setTimeout(() => {
@@ -118,6 +139,24 @@ export const RoomPage: React.FC<RoomPageProps> = ({ session, onLeave }) => {
     const unsubKicked = subscribe('KICKED', () => {
       alert('You have been removed from the room by the host.');
       onLeave();
+    });
+
+    const unsubShareRequest = subscribe('SCREEN_SHARE_REQUEST_FROM_USER', (event: WSEvent) => {
+      if (isHost) {
+        setPendingShareRequest({
+          userId: event.payload.requester_id || event.payload.user_id,
+          userName: event.payload.requester_name || event.payload.user_name,
+        });
+      }
+    });
+
+    const unsubShareResponse = subscribe('SCREEN_SHARE_PERMISSION_RESPONSE', (event: WSEvent) => {
+      if (event.payload.approved) {
+        alert('Host approved your screen share request! Starting screen share...');
+        startScreenShare();
+      } else {
+        alert(`Host denied your screen share request.`);
+      }
     });
 
     return () => {
@@ -132,11 +171,23 @@ export const RoomPage: React.FC<RoomPageProps> = ({ session, onLeave }) => {
       unsubSettings();
       unsubReaction();
       unsubKicked();
+      unsubShareRequest();
+      unsubShareResponse();
     };
-  }, [subscribe, onLeave]);
+  }, [subscribe, onLeave, isHost, startScreenShare]);
 
-  const isHost = session.role === 'HOST';
-  const canControl = isHost || settings.allow_participant_control;
+  const handleStartScreenShare = () => {
+    if (isHost || settings.allow_screen_share) {
+      startScreenShare();
+    } else {
+      sendEvent('SCREEN_SHARE_REQUEST');
+      alert('Screen share permission request sent to host. Waiting for approval...');
+    }
+  };
+
+  const handleStopScreenShare = () => {
+    stopScreenShare();
+  };
 
   const handleSetUrl = async (url: string) => {
     try {
@@ -148,9 +199,15 @@ export const RoomPage: React.FC<RoomPageProps> = ({ session, onLeave }) => {
 
   const handleUploadFile = async (file: File) => {
     try {
-      await uploadLocalVideo(session.room_id, session.token, file);
+      // Use P2P captureStream for local files (no upload to server)
+      await startVideoShare(file);
     } catch (err: any) {
-      alert(err.message);
+      // Fall back to server upload if P2P fails
+      try {
+        await uploadLocalVideo(session.room_id, session.token, file);
+      } catch (uploadErr: any) {
+        alert(uploadErr.message);
+      }
     }
   };
 
@@ -193,9 +250,18 @@ export const RoomPage: React.FC<RoomPageProps> = ({ session, onLeave }) => {
           <VideoPlayer
             playbackState={playbackState}
             canControl={canControl}
+            selfUserId={session.user_id}
+            screenStream={screenStream}
+            peerStreams={peerStreams}
+            peerScreenStreams={peerScreenStreams}
             sendWSEvent={sendEvent}
             onSetUrl={handleSetUrl}
             onUploadFile={handleUploadFile}
+            onStartScreenShare={handleStartScreenShare}
+            onStopScreenShare={handleStopScreenShare}
+            isVideoSharing={isVideoSharing}
+            capturedVideoRef={capturedVideoRef}
+            onStopVideoShare={stopVideoShare}
           />
           <ReactionsBar reactions={reactions} onSendReaction={handleSendReaction} />
         </div>
@@ -227,6 +293,57 @@ export const RoomPage: React.FC<RoomPageProps> = ({ session, onLeave }) => {
           onClose={() => setShowSettingsModal(false)}
         />
       )}
+
+      {/* Host Permission Request Modal */}
+      {pendingShareRequest && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(0,0,0,0.8)',
+          backdropFilter: 'blur(8px)',
+          zIndex: 1100,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: '1rem'
+        }}>
+          <div className="glass-panel" style={{ width: '100%', maxWidth: '420px', padding: '1.75rem', textAlign: 'center' }}>
+            <Monitor size={40} color="#eab308" style={{ margin: '0 auto 1rem' }} />
+            <h3 style={{ fontFamily: 'var(--font-heading)', fontSize: '1.2rem', color: 'white', marginBottom: '0.5rem' }}>
+              Screen Share Request
+            </h3>
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '1.5rem' }}>
+              <strong>{pendingShareRequest.userName}</strong> is requesting permission to share their screen with internal audio in this room.
+            </p>
+            <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'center' }}>
+              <button
+                className="btn-secondary"
+                onClick={() => {
+                  sendEvent('SCREEN_SHARE_RESPONSE', { requester_id: pendingShareRequest.userId, approved: false });
+                  setPendingShareRequest(null);
+                }}
+                style={{ flex: 1, justifyContent: 'center' }}
+              >
+                Deny
+              </button>
+              <button
+                className="btn-primary"
+                onClick={() => {
+                  sendEvent('SCREEN_SHARE_RESPONSE', { requester_id: pendingShareRequest.userId, approved: true });
+                  setPendingShareRequest(null);
+                }}
+                style={{ flex: 1, justifyContent: 'center' }}
+              >
+                Approve
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
+

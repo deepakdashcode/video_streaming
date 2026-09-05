@@ -11,6 +11,8 @@ class MediaSourceType(str, Enum):
     NONE = "NONE"
     URL = "URL"
     LOCAL_FILE = "LOCAL_FILE"
+    SCREEN_SHARE = "SCREEN_SHARE"
+    P2P_VIDEO = "P2P_VIDEO"
 
 class User(BaseModel):
     id: str
@@ -29,12 +31,16 @@ class PlaybackState(BaseModel):
     position: float = 0.0 # seconds
     playback_rate: float = 1.0
     updated_at: float = Field(default_factory=lambda: time.time() * 1000) # Epoch ms
+    sharer_user_id: Optional[str] = None
+    sharer_name: Optional[str] = None
+    screen_stream_id: Optional[str] = None
 
 class RoomSettings(BaseModel):
     locked: bool = False
     allow_camera: bool = True
     allow_microphone: bool = True
     allow_participant_control: bool = False
+    allow_screen_share: bool = False
 
 class Room(BaseModel):
     id: str

@@ -1,6 +1,6 @@
 export type UserRole = 'HOST' | 'PARTICIPANT';
 
-export type MediaSourceType = 'NONE' | 'URL' | 'LOCAL_FILE';
+export type MediaSourceType = 'NONE' | 'URL' | 'LOCAL_FILE' | 'SCREEN_SHARE' | 'P2P_VIDEO';
 
 export interface User {
   id: string;
@@ -20,6 +20,9 @@ export interface PlaybackState {
   position: number; // in seconds
   playback_rate: number;
   updated_at: number; // epoch ms
+  sharer_user_id?: string | null;
+  sharer_name?: string | null;
+  screen_stream_id?: string | null;
 }
 
 export interface RoomSettings {
@@ -27,6 +30,7 @@ export interface RoomSettings {
   allow_camera: boolean;
   allow_microphone: boolean;
   allow_participant_control: boolean;
+  allow_screen_share: boolean;
 }
 
 export interface Room {
